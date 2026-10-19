@@ -1,0 +1,20 @@
+import { createClient } from '@supabase/supabase-js';
+const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
+export default async (request) => {
+ if(request.method!=='GET') return json({error:'Kaedah tidak dibenarkan'},405);
+ const auth=request.headers.get('authorization')||'';
+ const token=auth.startsWith('Bearer ')?auth.slice(7):'';
+ if(!token) return json({error:'Log masuk diperlukan'},401);
+ const url=process.env.SUPABASE_URL, anon=process.env.SUPABASE_ANON_KEY, service=process.env.SUPABASE_SERVICE_ROLE_KEY;
+ if(!url||!anon||!service) return json({error:'Konfigurasi pelayan belum lengkap'},500);
+ const userClient=createClient(url,anon,{global:{headers:{Authorization:`Bearer ${token}`}},auth:{persistSession:false}});
+ const {data:{user},error:userError}=await userClient.auth.getUser(token);
+ if(userError||!user) return json({error:'Sesi tidak sah'},401);
+ const adminClient=createClient(url,service,{auth:{persistSession:false,autoRefreshToken:false}});
+ const {data:profile,error:profileError}=await adminClient.from('profiles').select('role').eq('id',user.id).single();
+ if(profileError||profile?.role!=='admin') return json({error:'Akses pentadbir diperlukan'},403);
+ const {data,error}=await adminClient.from('profiles').select('id,full_name,role,year_level,created_at').order('created_at',{ascending:false}).limit(500);
+ if(error) return json({error:'Gagal mendapatkan pengguna'},500);
+ await adminClient.from('audit_logs').insert({actor_id:user.id,action:'senarai_pengguna',target_type:'profiles',details:{count:data.length}});
+ return json({users:data});
+};
